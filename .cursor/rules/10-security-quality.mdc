@@ -1,0 +1,87 @@
+---
+description: Project contract — architecture, invariants, and conventions for Somniosus
+alwaysApply: true
+---
+
+# Somniosus Project Contract
+
+Somniosus is a modular enumeration framework: CLI thin, orchestration in `core/`, tool execution in `adapters/`, reproducible artifacts under `results/`. See `AI_GUIDE.md` for full details.
+
+## Architecture
+
+| Layer | Location | Responsibility |
+|-------|----------|----------------|
+| CLI | `somniosus.py` | Args, profile, plugin registry, delegation |
+| Core | `core/` | Orchestration, state, reporting, LLM integration |
+| Adapters | `adapters/` | Subprocess calls, raw artifact saving, parsing |
+
+**Plugins** (in `core/plugins/`) orchestrate: prerequisites, `should_run()`, where outputs go.  
+**Adapters** execute: subprocess, save to `raw/`, return structured dict.
+
+## Core Rules
+
+1. **Keep CLI thin** — No tool logic in `somniosus.py`; add plugins/adapters instead.
+2. **Reproducible artifacts** — Save raw to `run_dir/raw/`; stable JSON filenames.
+3. **Default safe** — `safe` profile stays low-noise; intrusive tools opt-in.
+4. **Evidence-based LLM** — No guessing; no vuln claims without proof.
+
+## Output Contract
+
+Run folder: `results/<target>/<timestamp>/`
+
+- `findings.json`, `tool_results.json`, `report.md`, `report_data.json`
+- `raw/` — unmodified tool output
+- LLM artifacts: `llm_input.json`, `llm.json`, `llm.md` (via `core/llm.py` only)
+
+State keys: `findings`, `extras[<tool_name>]`, `llm`.
+
+### Schema & Reporting Invariants
+
+- Deterministic report sections are facts only (tool execution summary, per-tool results, coverage).
+- AI sections must only use sanitized summaries from `llm_input.json` (never raw tool output).
+- Do not rename JSON keys or output filenames without also updating parsers and report generation.
+- Findings must remain mergeable and stable across tools (no tool-specific ad-hoc shapes in `findings`).
+
+## Adding a New Tool
+
+1. Adapter in `adapters/` — `scan(...) -> dict`, save raw, return structure.
+2. Plugin in `core/plugins/` — `name`, `requires`, `provides`, `available()`, `should_run()`, `run()`.
+3. Register in `core/plugins/__init__.py`.
+4. Gate: interactive or `thorough`, not `safe` by default.
+5. Adapters must set **timeouts** and avoid **unbounded concurrency**.
+
+## Security (Must Follow)
+
+- **Subprocess**: `subprocess.run([...], shell=False)` — never string-concatenate commands.
+- **Paths**: `pathlib.Path`; write only within run directory.
+- **Validation**: Normalize targets in `core/helpers.py`; whitelist over blacklist.
+- **LLM**: Untrusted tool output must not become instructions; use `llm_guardrails.py`.
+
+## Change Discipline
+
+- Prefer minimal diffs. Avoid repo-wide refactors unless explicitly requested.
+- If a change requires touching >5 files, propose a plan first.
+
+## Definition of Done (Per Change)
+
+Any change must include:
+- Updated or new tests when behavior changes.
+- Updated docs if behavior or CLI flags changed (`README.md` / `AI_GUIDE.md`).
+- No breaking changes to output file names or schema without explicit mention.
+- `--check` still passes and a smoke run works on a known target.
+
+## Verification
+
+Before finalizing, run the relevant checks (choose what exists in repo):
+- `python -m compileall .`
+- `ruff` and/or `pytest`
+- `mypy` if present
+- basic smoke run: `./somniosus.py <known_target> --profile safe --no-ai`
+
+## Pitfalls to Avoid
+
+- Subprocess calls in plugins (belong in adapters)
+- Outputs outside run directory
+- Missing keys in tool output (defensive handling)
+- LLM claiming vulns without evidence
+- Noisy scanning in `safe` profile

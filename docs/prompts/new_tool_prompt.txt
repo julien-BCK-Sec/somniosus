@@ -1,0 +1,9 @@
+Add tool: <tool>
+
+Before writing code:
+- Read docs/new_tool_template.md
+- Follow docs/new_tool_checklist.md
+- Use templates in core/templates/
+- Propose a plan and files to modify
+- Implement adapter + plugin
+- Report checklist completion

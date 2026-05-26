@@ -1,0 +1,22 @@
+---
+alwaysApply: true
+---
+---
+description: New tool workflow (templates + checklist)
+alwaysApply: true
+---
+
+# New Tool Workflow
+
+When adding a new tool integration (adapter/plugin/parser):
+
+1) Use the scaffold in `docs/new_tool_template.md` as the starting point.
+2) Follow `docs/new_tool_checklist.md` and ensure all applicable boxes are satisfied.
+3) Do not invent a new structure. Conform to Somniosus architecture:
+   - Adapters execute and save raw output.
+   - Plugins orchestrate and write to state.
+   - Parsers are deterministic and defensive.
+
+Before finalizing a new tool PR/change:
+- Summarize which checklist items were satisfied.
+- Call out any checklist items intentionally skipped and why.
