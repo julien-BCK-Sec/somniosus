@@ -12,6 +12,64 @@ def available() -> bool:
     return shutil.which("katana") is not None
 
 
+def _url_from_katana_record(obj: Dict[str, Any]) -> str | None:
+    """
+    Extract a request URL from a katana -jsonl line.
+    Current katana uses request.endpoint; older output may use top-level url.
+    """
+    if not isinstance(obj, dict):
+        return None
+
+    url = obj.get("url")
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+
+    req = obj.get("request")
+    if isinstance(req, dict):
+        endpoint = req.get("endpoint")
+        if isinstance(endpoint, str) and endpoint.strip():
+            return endpoint.strip()
+
+    return None
+
+
+def _host_from_url(url: str) -> str | None:
+    try:
+        return url.split("://", 1)[1].split("/", 1)[0].lower() or None
+    except (IndexError, AttributeError):
+        return None
+
+
+def parse_katana_jsonl(jsonl_path: Path) -> tuple[List[str], List[str]]:
+    """Parse katana JSONL into deduplicated URLs and hosts."""
+    urls: List[str] = []
+    hosts: set[str] = set()
+
+    if not jsonl_path.exists():
+        return [], []
+
+    with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            url = _url_from_katana_record(obj)
+            if not url:
+                continue
+
+            urls.append(url)
+            host = _host_from_url(url)
+            if host:
+                hosts.add(host)
+
+    return sorted(set(urls)), sorted(hosts)
+
+
 def scan(
     targets: List[str],
     raw_dir: Path,
@@ -70,29 +128,7 @@ def scan(
             "error": "non-zero exit",
         }
 
-    # Parse JSONL
-    urls = []
-    hosts = set()
-
-    if jsonl_path.exists():
-        with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    obj = json.loads(line.strip())
-                except Exception:
-                    continue
-
-                url = obj.get("url")
-                if not url:
-                    continue
-
-                urls.append(url)
-
-                try:
-                    host = url.split("://", 1)[1].split("/", 1)[0]
-                    hosts.add(host)
-                except Exception:
-                    pass
+    urls, hosts = parse_katana_jsonl(jsonl_path)
 
     return {
         "ok": True,
@@ -105,8 +141,8 @@ def scan(
             "stderr": str(stderr_path.relative_to(raw_dir.parent)),
         },
         "data": {
-            "urls": sorted(set(urls)),
-            "hosts": sorted(hosts),
-            "count": len(set(urls)),
+            "urls": urls,
+            "hosts": hosts,
+            "count": len(urls),
         },
     }
