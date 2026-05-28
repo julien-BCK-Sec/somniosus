@@ -185,6 +185,8 @@ All artifacts are reproducible and versionable.
 ./somniosus.py --check
 ```
 
+**httpx:** Somniosus requires [ProjectDiscovery httpx](https://github.com/projectdiscovery/httpx) on your `PATH`. Python’s unrelated `httpx` CLI will be detected as the wrong binary. When nmap finds web ports (including **3000**), probes use `http://<host>:<port>` automatically (not only 80/443).
+
 ## Profiles
 
 | Profile | Tools |

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from core import helpers
-from core.helpers import tool_available, has_web_ports
+from core.helpers import has_web_ports, httpx_probe_urls, httpx_subdomain_probe_urls, projectdiscovery_httpx_available
 from core.io import write_json
 from core.registry import Tool
 from core.state import State, ToolResult
@@ -18,7 +18,7 @@ class HttpxMainTool(Tool):
     provides = {"httpx_main"}
 
     def available(self) -> bool:
-        return tool_available("httpx")
+        return projectdiscovery_httpx_available()
 
     def should_run(self, state: State, args) -> bool:
         return bool(state.nmap) and has_web_ports(state.nmap)
@@ -27,12 +27,32 @@ class HttpxMainTool(Tool):
         start = datetime.now().isoformat(timespec="seconds")
 
         if not self.available():
-            return ToolResult(tool=self.name, ok=True, skipped=True, reason="httpx not available", started_at=start, ended_at=start)
+            return ToolResult(
+                tool=self.name,
+                ok=True,
+                skipped=True,
+                reason="ProjectDiscovery httpx not available (wrong binary or not installed)",
+                started_at=start,
+                ended_at=start,
+            )
         if not self.should_run(state, args):
             return ToolResult(tool=self.name, ok=True, skipped=True, reason="no web ports found", started_at=start, ended_at=start)
 
-        obj = httpx_scan.scan(state.target, paths.raw, inputs=None, label="httpx")
+        probe_urls = httpx_probe_urls(state.target, state.nmap)
+        obj = httpx_scan.scan(state.target, paths.raw, inputs=probe_urls, label="httpx")
         write_json(paths.base / "httpx.json", obj)
+
+        if obj.get("ok") is False and obj.get("returncode") == -1:
+            end = datetime.now().isoformat(timespec="seconds")
+            return ToolResult(
+                tool=self.name,
+                ok=False,
+                skipped=False,
+                reason=(obj.get("stderr") or "httpx failed")[:500],
+                data=obj,
+                started_at=start,
+                ended_at=end,
+            )
 
         # Extract live URLs from httpx records
         records = obj.get("httpx", []) or []
@@ -54,7 +74,7 @@ class HttpxSubdomainsTool(Tool):
     provides = {"httpx_subdomains"}
 
     def available(self) -> bool:
-        return tool_available("httpx")
+        return projectdiscovery_httpx_available()
 
     def should_run(self, state: State, args) -> bool:
         if not state.subfinder:
@@ -66,7 +86,14 @@ class HttpxSubdomainsTool(Tool):
         start = datetime.now().isoformat(timespec="seconds")
 
         if not self.available():
-            return ToolResult(tool=self.name, ok=True, skipped=True, reason="httpx not available", started_at=start, ended_at=start)
+            return ToolResult(
+                tool=self.name,
+                ok=True,
+                skipped=True,
+                reason="ProjectDiscovery httpx not available (wrong binary or not installed)",
+                started_at=start,
+                ended_at=start,
+            )
         if not self.should_run(state, args):
             reason = "no subdomains"
             return ToolResult(tool=self.name, ok=True, skipped=True, reason=reason, started_at=start, ended_at=start)
@@ -74,7 +101,8 @@ class HttpxSubdomainsTool(Tool):
         subs = [str(x) for x in state.subfinder.get("subdomains", []) if x is not None]
         subs = subs[: max(0, args.max_subdomains)]
 
-        obj = httpx_scan.scan(state.target, paths.raw, inputs=subs, label="httpx_subdomains")
+        probe_urls = httpx_subdomain_probe_urls(subs, state.nmap)
+        obj = httpx_scan.scan(state.target, paths.raw, inputs=probe_urls, label="httpx_subdomains")
         write_json(paths.base / "httpx_subdomains.json", obj)
 
         end = datetime.now().isoformat(timespec="seconds")

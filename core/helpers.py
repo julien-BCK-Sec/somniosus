@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+from typing import Any, Dict, Iterable, List
 from urllib.parse import urlparse
+
+# TCP ports treated as web for httpx probing (aligned with has_web_ports).
+WEB_TCP_PORTS = frozenset({80, 443, 8000, 8080, 8443, 8888, 3000, 5000})
 
 
 def is_full_mode(args) -> bool:
@@ -14,6 +19,27 @@ def tool_available(tool: str) -> bool:
     return shutil.which(tool) is not None
 
 
+def projectdiscovery_httpx_available() -> bool:
+    """
+    True when `httpx` on PATH is ProjectDiscovery's probe (not Python's httpx CLI).
+    """
+    path = shutil.which("httpx")
+    if not path:
+        return False
+    try:
+        proc = subprocess.run(
+            [path, "-h"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        help_text = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        return "-json" in help_text and "-tech-detect" in help_text
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def looks_like_ip(target: str) -> bool:
     if not target:
         return False
@@ -23,11 +49,30 @@ def looks_like_ip(target: str) -> bool:
     return ":" in target  # crude ipv6 heuristic
 
 
+def _explicit_port_from_target(target: str) -> int | None:
+    s = (target or "").strip()
+    if not s:
+        return None
+    if "://" in s:
+        port = urlparse(s).port
+        return port if port is not None else None
+    if ":" in s and not looks_like_ip(s.split(":", 1)[0]):
+        # host:port (not IPv6)
+        _, port_str = s.rsplit(":", 1)
+        if port_str.isdigit():
+            return int(port_str)
+    return None
+
+
 def normalize_domain_target(target: str) -> str:
+    """Hostname or host:port; strips URL scheme when present."""
     if "://" in target:
         u = urlparse(target)
-        return u.hostname or target
-    return target
+        host = u.hostname or target
+        if u.port is not None:
+            return f"{host}:{u.port}"
+        return host
+    return target.strip()
 
 
 def open_tcp_ports(nmap_obj: dict) -> set[int]:
@@ -39,8 +84,58 @@ def open_tcp_ports(nmap_obj: dict) -> set[int]:
 
 
 def has_web_ports(nmap_obj: dict) -> bool:
-    web = {80, 443, 8000, 8080, 8443, 8888, 3000, 5000}
-    return len(open_tcp_ports(nmap_obj) & web) > 0
+    return len(open_tcp_ports(nmap_obj) & set(WEB_TCP_PORTS)) > 0
+
+
+def httpx_probe_urls(target: str, nmap_obj: dict | None = None) -> List[str]:
+    """
+    Build http(s) URLs for ProjectDiscovery httpx from nmap web ports and/or
+  explicit port in target (e.g. juice.local:3000 or http://host:3000/).
+    """
+    host = _host_from_url(target) or target.strip()
+    if not host:
+        return []
+
+    explicit = _explicit_port_from_target(target)
+    ports: set[int] = set()
+    if nmap_obj:
+        ports |= open_tcp_ports(nmap_obj) & set(WEB_TCP_PORTS)
+    if explicit is not None:
+        ports.add(explicit)
+    if not ports:
+        ports = {80, 443}
+
+    urls: List[str] = []
+    for port in sorted(ports):
+        if port == 80:
+            urls.append(f"http://{host}")
+        elif port == 443:
+            urls.append(f"https://{host}")
+        else:
+            urls.append(f"http://{host}:{port}")
+            if port in (8443, 4443):
+                urls.append(f"https://{host}:{port}")
+
+    return _dedupe_preserve_order(urls)
+
+
+def httpx_subdomain_probe_urls(subdomains: List[str], nmap_obj: dict | None = None) -> List[str]:
+    """Probe URLs for discovered subdomains (uses same non-80/443 ports as nmap when only those are open)."""
+    extra_ports = sorted(open_tcp_ports(nmap_obj or {}) & set(WEB_TCP_PORTS) - {80, 443})
+    only_alt = bool(extra_ports) and not (open_tcp_ports(nmap_obj or {}) & {80, 443})
+
+    out: List[str] = []
+    for sub in subdomains:
+        s = str(sub).strip()
+        if not s:
+            continue
+        if only_alt:
+            for p in extra_ports:
+                out.append(f"http://{s}:{p}")
+        else:
+            out.append(f"http://{s}")
+            out.append(f"https://{s}")
+    return _dedupe_preserve_order(out)
 
 
 def has_dns_port(nmap_obj: dict) -> bool:
@@ -54,19 +149,22 @@ def has_dns_port(nmap_obj: dict) -> bool:
 
 def check_tools() -> None:
     required = ["nmap"]
-    optional = ["httpx", "dig", "subfinder", "nuclei", "katana", "ffuf", "dnstwist", "tldx", "whois"]
-
+    optional = ["dig", "subfinder", "nuclei", "katana", "ffuf", "dnstwist", "tldx", "whois"]
 
     print("\nTool check:")
     for t in required:
         print(f"  {'✓' if tool_available(t) else '✗'} {t} (required)")
+    if projectdiscovery_httpx_available():
+        print("  ✓ httpx (ProjectDiscovery)")
+    elif tool_available("httpx"):
+        print("  ✗ httpx (wrong binary — install github.com/projectdiscovery/httpx)")
+    else:
+        print("  — httpx (optional, not installed)")
     for t in optional:
         print(f"  {'✓' if tool_available(t) else '—'} {t} (optional)")
     print()
 
 # --- Findings deduplication ---
-
-from typing import Any, Dict, Iterable, List
 
 SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 

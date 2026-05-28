@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from core.helpers import tool_available
+from core.helpers import projectdiscovery_httpx_available
 from core.io import write_json
 from core.registry import Tool
 from core.state import State, ToolResult
@@ -17,7 +17,7 @@ class HttpxKatanaTool(Tool):
     provides = {"httpx_katana"}
 
     def available(self) -> bool:
-        return tool_available("httpx")
+        return projectdiscovery_httpx_available()
 
     def should_run(self, state: State, args) -> bool:
         web = state.container.get("extras", {}).get("web", {})
